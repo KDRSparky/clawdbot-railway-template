@@ -122,6 +122,57 @@ async function waitForGatewayReady(opts = {}) {
   return false;
 }
 
+// ─── RAILWAY-FIX: patch openclaw.json for Railway proxy compatibility ────
+// Ensures trustedProxies and controlUi settings survive across restarts.
+// Called before every gateway start and after onboard completes.
+function patchConfigForRailway() {
+  try {
+    const p = configPath();
+    if (!fs.existsSync(p)) return;
+    const config = JSON.parse(fs.readFileSync(p, "utf8"));
+    let changed = false;
+
+    if (!config.gateway) config.gateway = {};
+
+    // Railway's proxy connects from 100.64.0.0/10 CGNAT range
+    const expectedProxies = ["100.64.0.0/10", "127.0.0.1"];
+    if (JSON.stringify(config.gateway.trustedProxies) !== JSON.stringify(expectedProxies)) {
+      config.gateway.trustedProxies = expectedProxies;
+      changed = true;
+    }
+
+    // Enable Control UI
+    if (!config.gateway.controlUi || !config.gateway.controlUi.enabled) {
+      config.gateway.controlUi = { enabled: true };
+      changed = true;
+    }
+
+    // Ensure bind is lan (belt-and-suspenders with the CLI arg)
+    if (config.gateway.bind !== "lan") {
+      config.gateway.bind = "lan";
+      changed = true;
+    }
+
+    // Sync token from env var
+    if (OPENCLAW_GATEWAY_TOKEN) {
+      if (!config.gateway.auth) config.gateway.auth = {};
+      if (config.gateway.auth.token !== OPENCLAW_GATEWAY_TOKEN) {
+        config.gateway.auth.mode = "token";
+        config.gateway.auth.token = OPENCLAW_GATEWAY_TOKEN;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      fs.writeFileSync(p, JSON.stringify(config, null, 2));
+      console.log("[railway-fix] Patched openclaw.json: bind=lan, trustedProxies set, controlUi enabled, token synced");
+    }
+  } catch (err) {
+    console.error("[railway-fix] Failed to patch config:", err);
+  }
+}
+// ─── END RAILWAY-FIX ─────────────────────────────────────────────────
+
 async function startGateway() {
   if (gatewayProc) return;
   if (!isConfigured()) throw new Error("Gateway cannot start: not configured");
@@ -129,11 +180,14 @@ async function startGateway() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
+  // RAILWAY-FIX: patch config file before starting gateway
+  patchConfigForRailway();
+
   const args = [
     "gateway",
     "run",
     "--bind",
-    "loopback",
+    "lan",               // RAILWAY-FIX #1: was "loopback" — must be "lan" for Railway proxy
     "--port",
     String(INTERNAL_GATEWAY_PORT),
     "--auth",
@@ -438,9 +492,8 @@ function buildOnboardArgs(payload) {
     "--skip-health",
     "--workspace",
     WORKSPACE_DIR,
-    // The wrapper owns public networking; keep the gateway internal.
     "--gateway-bind",
-    "loopback",
+    "lan",               // RAILWAY-FIX #2: was "loopback" — must be "lan" for Railway proxy
     "--gateway-port",
     String(INTERNAL_GATEWAY_PORT),
     "--gateway-auth",
@@ -532,11 +585,13 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   // Optional channel setup (only after successful onboarding, and only if the installed CLI supports it).
   if (ok) {
     // Ensure gateway token is written into config so the browser UI can authenticate reliably.
-    // (We also enforce loopback bind since the wrapper proxies externally.)
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "lan"]));  // RAILWAY-FIX #3: was "loopback"
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
+
+    // RAILWAY-FIX: Also set trustedProxies and controlUi in the config file
+    patchConfigForRailway();
 
     const channelsHelp = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "add", "--help"]));
     const helpText = channelsHelp.output || "";
