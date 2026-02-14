@@ -37,7 +37,6 @@ Optional:
 
 Notes:
 - This template pins OpenClaw to a released version by default via Docker build arg `OPENCLAW_GIT_REF` (override if you want `main`).
-- **Backward compatibility:** The wrapper includes a shim for `CLAWDBOT_*` environment variables (logs a deprecation warning when used). `MOLTBOT_*` variables are **not** shimmed — this repo never shipped with MOLTBOT prefixes, so no existing deployments rely on them.
 
 4) Enable **Public Networking** (HTTP). Railway will assign a domain.
    - This service is configured to listen on port `8080` (including custom domains).
@@ -47,6 +46,15 @@ Then:
 - Visit `https://<your-app>.up.railway.app/setup`
 - Complete setup
 - Visit `https://<your-app>.up.railway.app/` and `/openclaw`
+
+## Support / community
+
+- GitHub Issues: https://github.com/vignesh07/openclaw-railway-template/issues
+- Discord: https://discord.com/invite/clawd
+
+If you’re filing a bug, please include the output of:
+- `/healthz`
+- `/setup/api/debug` (after authenticating to /setup)
 
 ## Getting chat tokens (so you don’t have to scramble)
 
